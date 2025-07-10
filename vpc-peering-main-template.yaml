@@ -1,0 +1,444 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'VPC Peering Complete Workshop - Main Template (us-east-1)'
+
+Parameters:
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of existing EC2 KeyPair for SSH access
+    ConstraintDescription: Must be the name of an existing EC2 KeyPair
+  
+  YourPublicIP:
+    Type: String
+    Description: Your public IP address for SSH access (format x.x.x.x/32)
+    AllowedPattern: '^([0-9]{1,3}\.){3}[0-9]{1,3}/32$'
+    ConstraintDescription: Must be a valid IP address in CIDR format (x.x.x.x/32)
+
+Resources:
+  # ==========================================
+  # HUB VPC (10.0.0.0/16)
+  # ==========================================
+  HubVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: Hub-vpc
+
+  HubInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: Hub-IGW
+
+  HubIGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref HubVPC
+      InternetGatewayId: !Ref HubInternetGateway
+
+  # Hub Subnets
+  HubPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref HubVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: Hub-subnet-public
+
+  HubPrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref HubVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: Hub-subnet-private
+
+  # Hub Route Tables
+  HubPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref HubVPC
+      Tags:
+        - Key: Name
+          Value: Hub-public-rt
+
+  HubPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref HubVPC
+      Tags:
+        - Key: Name
+          Value: Hub-private-rt
+
+  HubPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: HubIGWAttachment
+    Properties:
+      RouteTableId: !Ref HubPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref HubInternetGateway
+
+  HubPublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref HubPublicSubnet
+      RouteTableId: !Ref HubPublicRouteTable
+
+  HubPrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref HubPrivateSubnet
+      RouteTableId: !Ref HubPrivateRouteTable
+
+  # ==========================================
+  # WEB-APP VPC (10.1.0.0/16)
+  # ==========================================
+  WebAppVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.1.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: Web-App-vpc
+
+  WebAppInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: WebApp-IGW
+
+  WebAppIGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref WebAppVPC
+      InternetGatewayId: !Ref WebAppInternetGateway
+
+  # WebApp Subnets
+  WebAppPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref WebAppVPC
+      CidrBlock: 10.1.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: Web-App-subnet-public
+
+  WebAppPrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref WebAppVPC
+      CidrBlock: 10.1.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: Web-App-subnet-private
+
+  # WebApp Route Tables
+  WebAppPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref WebAppVPC
+      Tags:
+        - Key: Name
+          Value: WebApp-public-rt
+
+  WebAppPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref WebAppVPC
+      Tags:
+        - Key: Name
+          Value: WebApp-private-rt
+
+  WebAppPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: WebAppIGWAttachment
+    Properties:
+      RouteTableId: !Ref WebAppPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref WebAppInternetGateway
+
+  WebAppPublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref WebAppPublicSubnet
+      RouteTableId: !Ref WebAppPublicRouteTable
+
+  WebAppPrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref WebAppPrivateSubnet
+      RouteTableId: !Ref WebAppPrivateRouteTable
+
+  # ==========================================
+  # MANAGEMENT VPC (10.3.0.0/16)
+  # ==========================================
+  ManagementVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.3.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: Management-vpc
+
+  ManagementInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: Management-IGW
+
+  ManagementIGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref ManagementVPC
+      InternetGatewayId: !Ref ManagementInternetGateway
+
+  # Management Subnets
+  ManagementPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ManagementVPC
+      CidrBlock: 10.3.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: Management-subnet-public
+
+  ManagementPrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ManagementVPC
+      CidrBlock: 10.3.2.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: Management-subnet-private
+
+  # Management Route Tables
+  ManagementPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ManagementVPC
+      Tags:
+        - Key: Name
+          Value: Management-public-rt
+
+  ManagementPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ManagementVPC
+      Tags:
+        - Key: Name
+          Value: Management-private-rt
+
+  ManagementPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: ManagementIGWAttachment
+    Properties:
+      RouteTableId: !Ref ManagementPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref ManagementInternetGateway
+
+  ManagementPublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref ManagementPublicSubnet
+      RouteTableId: !Ref ManagementPublicRouteTable
+
+  ManagementPrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref ManagementPrivateSubnet
+      RouteTableId: !Ref ManagementPrivateRouteTable
+
+  # # ==========================================
+  # # VPC PEERING CONNECTIONS
+  # # ==========================================
+  
+  # # Hub to WebApp Peering
+  # HubToWebAppPeering:
+  #   Type: AWS::EC2::VPCPeeringConnection
+  #   Properties:
+  #     VpcId: !Ref HubVPC
+  #     PeerVpcId: !Ref WebAppVPC
+  #     Tags:
+  #       - Key: Name
+  #         Value: Hub-to-WebApp
+
+  # # Hub to Management Peering
+  # HubToManagementPeering:
+  #   Type: AWS::EC2::VPCPeeringConnection
+  #   Properties:
+  #     VpcId: !Ref HubVPC
+  #     PeerVpcId: !Ref ManagementVPC
+  #     Tags:
+  #       - Key: Name
+  #         Value: Hub-to-Management
+
+  # # Management to WebApp Direct Peering (KEY FIX)
+  # ManagementToWebAppPeering:
+  #   Type: AWS::EC2::VPCPeeringConnection
+  #   Properties:
+  #     VpcId: !Ref ManagementVPC
+  #     PeerVpcId: !Ref WebAppVPC
+  #     Tags:
+  #       - Key: Name
+  #         Value: Management-to-WebApp-Direct
+
+  # # ==========================================
+  # # PEERING ROUTES
+  # # ==========================================
+  
+  # # Hub Routes
+  # HubToWebAppRoute:
+  #   Type: AWS::EC2::Route
+  #   DependsOn: HubToWebAppPeering
+  #   Properties:
+  #     RouteTableId: !Ref HubPublicRouteTable
+  #     DestinationCidrBlock: 10.1.0.0/16
+  #     VpcPeeringConnectionId: !Ref HubToWebAppPeering
+
+  # HubToWebAppRoutePrivate:
+  #   Type: AWS::EC2::Route
+  #   DependsOn: HubToWebAppPeering
+  #   Properties:
+  #     RouteTableId: !Ref HubPrivateRouteTable
+  #     DestinationCidrBlock: 10.1.0.0/16
+  #     VpcPeeringConnectionId: !Ref HubToWebAppPeering
+
+  # HubToManagementRoute:
+  #   Type: AWS::EC2::Route
+  #   DependsOn: HubToManagementPeering
+  #   Properties:
+  #     RouteTableId: !Ref HubPublicRouteTable
+  #     DestinationCidrBlock: 10.3.0.0/16
+  #     VpcPeeringConnectionId: !Ref HubToManagementPeering
+
+  # HubToManagementRoutePrivate:
+  #   Type: AWS::EC2::Route
+  #   DependsOn: HubToManagementPeering
+  #   Properties:
+  #     RouteTableId: !Ref HubPrivateRouteTable
+  #     DestinationCidrBlock: 10.3.0.0/16
+  #     VpcPeeringConnectionId: !Ref HubToManagementPeering
+
+  # # WebApp Routes
+  # WebAppToHubRoute:
+  #   Type: AWS::EC2::Route
+  #   DependsOn: HubToWebAppPeering
+  #   Properties:
+  #     RouteTableId: !Ref WebAppPublicRouteTable
+  #     DestinationCidrBlock: 10.0.0.0/16
+  #     VpcPeeringConnectionId: !Ref HubToWebAppPeering
+
+  # WebAppToHubRoutePrivate:
+  #   Type: AWS::EC2::Route
+  #   DependsOn: HubToWebAppPeering
+  #   Properties:
+  #     RouteTableId: !Ref WebAppPrivateRouteTable
+  #     DestinationCidrBlock: 10.0.0.0/16
+  #     VpcPeeringConnectionId: !Ref HubToWebAppPeering
+
+  # WebAppToManagementRoute:
+  #   Type: AWS::EC2::Route
+  #   DependsOn: ManagementToWebAppPeering
+  #   Properties:
+  #     RouteTableId: !Ref WebAppPublicRouteTable
+  #     DestinationCidrBlock: 10.3.0.0/16
+  #     VpcPeeringConnectionId: !Ref ManagementToWebAppPeering
+
+  # WebAppToManagementRoutePrivate:
+  #   Type: AWS::EC2::Route
+  #   DependsOn: ManagementToWebAppPeering
+  #   Properties:
+  #     RouteTableId: !Ref WebAppPrivateRouteTable
+  #     DestinationCidrBlock: 10.3.0.0/16
+  #     VpcPeeringConnectionId: !Ref ManagementToWebAppPeering
+
+  # # Management Routes
+  # ManagementToHubRoute:
+  #   Type: AWS::EC2::Route
+  #   DependsOn: HubToManagementPeering
+  #   Properties:
+  #     RouteTableId: !Ref ManagementPublicRouteTable
+  #     DestinationCidrBlock: 10.0.0.0/16
+  #     VpcPeeringConnectionId: !Ref HubToManagementPeering
+
+  # ManagementToHubRoutePrivate:
+  #   Type: AWS::EC2::Route
+  #   DependsOn: HubToManagementPeering
+  #   Properties:
+  #     RouteTableId: !Ref ManagementPrivateRouteTable
+  #     DestinationCidrBlock: 10.0.0.0/16
+  #     VpcPeeringConnectionId: !Ref HubToManagementPeering
+
+  # ManagementToWebAppRoute:
+  #   Type: AWS::EC2::Route
+  #   DependsOn: ManagementToWebAppPeering
+  #   Properties:
+  #     RouteTableId: !Ref ManagementPublicRouteTable
+  #     DestinationCidrBlock: 10.1.0.0/16
+  #     VpcPeeringConnectionId: !Ref ManagementToWebAppPeering
+
+  # ManagementToWebAppRoutePrivate:
+  #   Type: AWS::EC2::Route
+  #   DependsOn: ManagementToWebAppPeering
+  #   Properties:
+  #     RouteTableId: !Ref ManagementPrivateRouteTable
+  #     DestinationCidrBlock: 10.1.0.0/16
+  #     VpcPeeringConnectionId: !Ref ManagementToWebAppPeering
+
+Outputs:
+  HubVPCId:
+    Description: Hub VPC ID
+    Value: !Ref HubVPC
+    Export:
+      Name: !Sub "${AWS::StackName}-HubVPC"
+
+  WebAppVPCId:
+    Description: Web-App VPC ID
+    Value: !Ref WebAppVPC
+    Export:
+      Name: !Sub "${AWS::StackName}-WebAppVPC"
+
+  ManagementVPCId:
+    Description: Management VPC ID
+    Value: !Ref ManagementVPC
+    Export:
+      Name: !Sub "${AWS::StackName}-ManagementVPC"
+
+  HubPublicSubnetId:
+    Description: Hub Public Subnet ID
+    Value: !Ref HubPublicSubnet
+    Export:
+      Name: !Sub "${AWS::StackName}-HubPublicSubnet"
+
+  WebAppPublicSubnetId:
+    Description: Web-App Public Subnet ID
+    Value: !Ref WebAppPublicSubnet
+    Export:
+      Name: !Sub "${AWS::StackName}-WebAppPublicSubnet"
+
+  ManagementPublicSubnetId:
+    Description: Management Public Subnet ID
+    Value: !Ref ManagementPublicSubnet
+    Export:
+      Name: !Sub "${AWS::StackName}-ManagementPublicSubnet"

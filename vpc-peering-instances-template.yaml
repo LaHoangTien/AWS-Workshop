@@ -1,0 +1,427 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'VPC Peering Workshop - Security Groups and EC2 Instances'
+
+Parameters:
+  MainStackName:
+    Type: String
+    Description: Name of the main VPC stack
+    Default: vpc-peering-main
+
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of existing EC2 KeyPair for SSH access
+    Default: workshop-keypair
+
+  YourPublicIP:
+    Type: String
+    Description: Your public IP address for SSH access (format x.x.x.x/32)
+    AllowedPattern: '^([0-9]{1,3}\.){3}[0-9]{1,3}/32$'
+    Default: 14.191.232.131/32
+
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t2.small
+      - t3.micro
+      - t3.small
+    Description: EC2 instance type
+
+Mappings:
+  RegionMap:
+    us-east-1:
+      AMI: ami-0c02fb55956c7d316  # Amazon Linux 2023
+    us-west-2:
+      AMI: ami-008fe2fc65df48dac  # Amazon Linux 2023
+    eu-west-1:
+      AMI: ami-01dd271720c1ba44f  # Amazon Linux 2023
+    ap-southeast-1:
+      AMI: ami-047126e50991d067b  # Amazon Linux 2023
+
+Resources:
+  # ==========================================
+  # SECURITY GROUPS
+  # ==========================================
+
+  # Management Security Group (Bastion Host)
+  ManagementSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: Management-SG
+      GroupDescription: Security group for Management/Bastion host
+      VpcId:
+        Fn::ImportValue: !Sub "${MainStackName}-ManagementVPC"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref YourPublicIP
+          Description: SSH from your IP only
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 10.0.0.0/8
+          Description: ICMP from internal networks
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: All outbound traffic
+      Tags:
+        - Key: Name
+          Value: Management-SG
+
+  # Hub Security Group
+  HubSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: Hub-SG
+      GroupDescription: Security group for Hub VPC instances
+      VpcId:
+        Fn::ImportValue: !Sub "${MainStackName}-HubVPC"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 10.3.0.0/16
+          Description: SSH from Management VPC
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 10.0.0.0/8
+          Description: ICMP from internal networks
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 10.1.0.0/16
+          Description: HTTP from Web-App VPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: All outbound traffic
+      Tags:
+        - Key: Name
+          Value: Hub-SG
+
+  # Web-App Security Group (FIXED)
+  WebAppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: WebApp-SG
+      GroupDescription: Security group for Web-App VPC instances
+      VpcId:
+        Fn::ImportValue: !Sub "${MainStackName}-WebAppVPC"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 10.3.0.0/16
+          Description: SSH from Management VPC CIDR (FIXED)
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP from Internet
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS from Internet
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 10.0.0.0/8
+          Description: ICMP from internal networks
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: All outbound traffic
+      Tags:
+        - Key: Name
+          Value: WebApp-SG
+
+  # ==========================================
+  # EC2 INSTANCES
+  # ==========================================
+
+  # Management Instance (Bastion Host)
+  ManagementInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      SubnetId:
+        Fn::ImportValue: !Sub "${MainStackName}-ManagementPublicSubnet"
+      SecurityGroupIds:
+        - !Ref ManagementSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y htop tree wget curl
+          
+          # Configure hostname
+          hostnamectl set-hostname management-bastion
+          echo "127.0.0.1 management-bastion" >> /etc/hosts
+          
+          # Install additional tools
+          yum install -y telnet nc bind-utils
+          
+          # Create welcome message
+          cat > /etc/motd << 'EOF'
+          ================================================
+          🏗️  MANAGEMENT/BASTION HOST
+          ================================================
+          VPC: Management-vpc (10.3.0.0/16)
+          Role: SSH Jump Host for other VPCs
+          
+          Available commands:
+          - ping [target-ip]     : Test connectivity
+          - ssh ec2-user@[ip]    : SSH to other instances
+          - curl [url]           : Test HTTP connectivity
+          
+          Target IPs:
+          - Hub VPC: 10.0.x.x
+          - Web-App VPC: 10.1.x.x
+          - Database VPC: 10.2.x.x (cross-region)
+          ================================================
+          EOF
+          
+          # Enable SSH agent forwarding
+          echo "ForwardAgent yes" >> /home/ec2-user/.ssh/config
+          chown ec2-user:ec2-user /home/ec2-user/.ssh/config
+      Tags:
+        - Key: Name
+          Value: Management-Bastion
+
+  # Hub Instance
+  HubInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      SubnetId:
+        Fn::ImportValue: !Sub "${MainStackName}-HubPublicSubnet"
+      SecurityGroupIds:
+        - !Ref HubSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y htop tree wget curl httpd
+          
+          # Configure hostname
+          hostnamectl set-hostname hub-router
+          echo "127.0.0.1 hub-router" >> /etc/hosts
+          
+          # Start Apache for testing
+          systemctl start httpd
+          systemctl enable httpd
+          
+          # Create simple web page
+          cat > /var/www/html/index.html << 'EOF'
+          <html>
+          <head><title>Hub VPC Server</title></head>
+          <body>
+          <h1>🌐 Hub VPC Server</h1>
+          <p>VPC: Hub-vpc (10.0.0.0/16)</p>
+          <p>Role: Central Router</p>
+          <p>Status: Active</p>
+          </body>
+          </html>
+          EOF
+          
+          # Create welcome message
+          cat > /etc/motd << 'EOF'
+          ================================================
+          🌐 HUB VPC SERVER
+          ================================================
+          VPC: Hub-vpc (10.0.0.0/16)
+          Role: Central Router/Hub
+          
+          Peering Connections:
+          - Management VPC: 10.3.0.0/16
+          - Web-App VPC: 10.1.0.0/16
+          - Database VPC: 10.2.0.0/16 (cross-region)
+          
+          Services:
+          - Apache HTTP Server (port 80)
+          ================================================
+          EOF
+      Tags:
+        - Key: Name
+          Value: Hub-Router
+
+  # Web-App Instance
+  WebAppInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      SubnetId:
+        Fn::ImportValue: !Sub "${MainStackName}-WebAppPublicSubnet"
+      SecurityGroupIds:
+        - !Ref WebAppSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y htop tree wget curl httpd php
+          
+          # Configure hostname
+          hostnamectl set-hostname webapp-server
+          echo "127.0.0.1 webapp-server" >> /etc/hosts
+          
+          # Start Apache
+          systemctl start httpd
+          systemctl enable httpd
+          
+          # Create web application
+          cat > /var/www/html/index.php << 'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <title>Web Application Server</title>
+              <style>
+                  body { font-family: Arial, sans-serif; margin: 40px; }
+                  .container { max-width: 800px; margin: 0 auto; }
+                  .status { background: #d4edda; padding: 15px; border-radius: 5px; }
+              </style>
+          </head>
+          <body>
+              <div class="container">
+                  <h1>🚀 Web Application Server</h1>
+                  <div class="status">
+                      <h3>Server Information</h3>
+                      <p><strong>VPC:</strong> Web-App-vpc (10.1.0.0/16)</p>
+                      <p><strong>Role:</strong> Application Tier</p>
+                      <p><strong>Server Time:</strong> <?php echo date('Y-m-d H:i:s'); ?></p>
+                      <p><strong>Server IP:</strong> <?php echo $_SERVER['SERVER_ADDR']; ?></p>
+                  </div>
+                  
+                  <h3>Connectivity Status</h3>
+                  <ul>
+                      <li>✅ Internet Access: Available</li>
+                      <li>✅ Management Access: Via direct peering</li>
+                      <li>✅ Hub Access: Via VPC peering</li>
+                      <li>⚠️ Database Access: Requires additional setup</li>
+                  </ul>
+              </div>
+          </body>
+          </html>
+          EOF
+          
+          # Create welcome message
+          cat > /etc/motd << 'EOF'
+          ================================================
+          🚀 WEB APPLICATION SERVER
+          ================================================
+          VPC: Web-App-vpc (10.1.0.0/16)
+          Role: Application Tier
+          
+          Direct Peering:
+          - Management VPC: 10.3.0.0/16 (SSH access)
+          - Hub VPC: 10.0.0.0/16 (routing)
+          
+          Services:
+          - Apache HTTP Server (port 80)
+          - PHP Application
+          
+          Access:
+          - HTTP: http://[public-ip]/
+          - SSH: From Management VPC only
+          ================================================
+          EOF
+      Tags:
+        - Key: Name
+          Value: WebApp-Server
+
+  # ==========================================
+  # ELASTIC IPS (Optional)
+  # ==========================================
+  
+  ManagementEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref ManagementInstance
+      Tags:
+        - Key: Name
+          Value: Management-EIP
+
+  WebAppEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref WebAppInstance
+      Tags:
+        - Key: Name
+          Value: WebApp-EIP
+
+Outputs:
+  ManagementInstanceId:
+    Description: Management Instance ID
+    Value: !Ref ManagementInstance
+    Export:
+      Name: !Sub "${AWS::StackName}-ManagementInstance"
+
+  ManagementPublicIP:
+    Description: Management Instance Public IP
+    Value: !Ref ManagementEIP
+    Export:
+      Name: !Sub "${AWS::StackName}-ManagementPublicIP"
+
+  ManagementPrivateIP:
+    Description: Management Instance Private IP
+    Value: !GetAtt ManagementInstance.PrivateIp
+    Export:
+      Name: !Sub "${AWS::StackName}-ManagementPrivateIP"
+
+  HubInstanceId:
+    Description: Hub Instance ID
+    Value: !Ref HubInstance
+    Export:
+      Name: !Sub "${AWS::StackName}-HubInstance"
+
+  HubPrivateIP:
+    Description: Hub Instance Private IP
+    Value: !GetAtt HubInstance.PrivateIp
+    Export:
+      Name: !Sub "${AWS::StackName}-HubPrivateIP"
+
+  WebAppInstanceId:
+    Description: Web-App Instance ID
+    Value: !Ref WebAppInstance
+    Export:
+      Name: !Sub "${AWS::StackName}-WebAppInstance"
+
+  WebAppPublicIP:
+    Description: Web-App Instance Public IP
+    Value: !Ref WebAppEIP
+    Export:
+      Name: !Sub "${AWS::StackName}-WebAppPublicIP"
+
+  WebAppPrivateIP:
+    Description: Web-App Instance Private IP
+    Value: !GetAtt WebAppInstance.PrivateIp
+    Export:
+      Name: !Sub "${AWS::StackName}-WebAppPrivateIP"
+
+  WebAppURL:
+    Description: Web Application URL
+    Value: !Sub "http://${WebAppEIP}/"
+    Export:
+      Name: !Sub "${AWS::StackName}-WebAppURL"
+
+  SSHCommands:
+    Description: SSH Commands for testing
+    Value: !Sub |
+      # SSH to Management (Bastion):
+      ssh -A -i ${KeyPairName}.pem ec2-user@${ManagementEIP}
+      
+      # From Management, SSH to other instances:
+      ssh ec2-user@${HubInstance.PrivateIp}     # Hub
+      ssh ec2-user@${WebAppInstance.PrivateIp}  # Web-App

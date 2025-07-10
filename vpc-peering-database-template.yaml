@@ -1,0 +1,356 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'VPC Peering Workshop - Database VPC (us-west-2)'
+
+Parameters:
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of existing EC2 KeyPair for SSH access in us-west-2
+
+  # HubVPCId:
+  #   Type: String
+  #   Description: Hub VPC ID from us-east-1 for cross-region peering
+
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t2.small
+      - t3.micro
+      - t3.small
+    Description: EC2 instance type
+
+Mappings:
+  RegionMap:
+    us-west-2:
+      AMI: ami-008fe2fc65df48dac  # Amazon Linux 2023
+
+Resources:
+  # ==========================================
+  # DATABASE VPC (10.2.0.0/16) - us-west-2
+  # ==========================================
+  DatabaseVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.2.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: Database-vpc
+
+  DatabaseInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: Database-IGW
+
+  DatabaseIGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref DatabaseVPC
+      InternetGatewayId: !Ref DatabaseInternetGateway
+
+  # Database Subnets
+  DatabasePublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DatabaseVPC
+      CidrBlock: 10.2.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: Database-subnet-public
+
+  DatabasePrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DatabaseVPC
+      CidrBlock: 10.2.2.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: Database-subnet-private-1
+
+  DatabasePrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DatabaseVPC
+      CidrBlock: 10.2.3.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: Database-subnet-private-2
+
+  # Database Route Tables
+  DatabasePublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref DatabaseVPC
+      Tags:
+        - Key: Name
+          Value: Database-public-rt
+
+  DatabasePrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref DatabaseVPC
+      Tags:
+        - Key: Name
+          Value: Database-private-rt
+
+  DatabasePublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: DatabaseIGWAttachment
+    Properties:
+      RouteTableId: !Ref DatabasePublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref DatabaseInternetGateway
+
+  DatabasePublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DatabasePublicSubnet
+      RouteTableId: !Ref DatabasePublicRouteTable
+
+  DatabasePrivateSubnetRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DatabasePrivateSubnet1
+      RouteTableId: !Ref DatabasePrivateRouteTable
+
+  DatabasePrivateSubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DatabasePrivateSubnet2
+      RouteTableId: !Ref DatabasePrivateRouteTable
+
+  # ==========================================
+  # CROSS-REGION VPC PEERING
+  # ==========================================
+  # HubToDatabaseCrossRegionPeering:
+  #   Type: AWS::EC2::VPCPeeringConnection
+  #   Properties:
+  #     VpcId: !Ref DatabaseVPC
+  #     PeerVpcId: !Ref HubVPCId
+  #     PeerRegion: us-east-1
+  #     Tags:
+  #       - Key: Name
+  #         Value: Hub-to-Database-CrossRegion
+
+  # # Database Routes for Cross-Region Peering
+  # DatabaseToHubRoute:
+  #   Type: AWS::EC2::Route
+  #   DependsOn: HubToDatabaseCrossRegionPeering
+  #   Properties:
+  #     RouteTableId: !Ref DatabasePublicRouteTable
+  #     DestinationCidrBlock: 10.0.0.0/16
+  #     VpcPeeringConnectionId: !Ref HubToDatabaseCrossRegionPeering
+
+  # DatabaseToHubRoutePrivate:
+  #   Type: AWS::EC2::Route
+  #   DependsOn: HubToDatabaseCrossRegionPeering
+  #   Properties:
+  #     RouteTableId: !Ref DatabasePrivateRouteTable
+  #     DestinationCidrBlock: 10.0.0.0/16
+  #     VpcPeeringConnectionId: !Ref HubToDatabaseCrossRegionPeering
+
+  # ==========================================
+  # SECURITY GROUPS
+  # ==========================================
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: Database-SG
+      GroupDescription: Security group for Database VPC instances
+      VpcId: !Ref DatabaseVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 10.3.0.0/16
+          Description: SSH from Management VPC
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: 10.1.0.0/16
+          Description: MySQL from Web-App VPC
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: 10.1.0.0/16
+          Description: PostgreSQL from Web-App VPC
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 10.0.0.0/8
+          Description: ICMP from internal networks
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: All outbound traffic
+      Tags:
+        - Key: Name
+          Value: Database-SG
+
+  # ==========================================
+  # EC2 INSTANCE
+  # ==========================================
+  DatabaseInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      SubnetId: !Ref DatabasePublicSubnet
+      SecurityGroupIds:
+        - !Ref DatabaseSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y htop tree wget curl mysql-server postgresql-server
+          
+          # Configure hostname
+          hostnamectl set-hostname database-server
+          echo "127.0.0.1 database-server" >> /etc/hosts
+          
+          # Install and configure MySQL
+          systemctl start mysqld
+          systemctl enable mysqld
+          
+          # Get MySQL temporary password
+          TEMP_PASS=$(grep 'temporary password' /var/log/mysqld.log | awk '{print $NF}')
+          
+          # Create MySQL setup script
+          cat > /home/ec2-user/mysql_setup.sql << 'EOF'
+          ALTER USER 'root'@'localhost' IDENTIFIED BY 'TempPassword123!';
+          CREATE DATABASE webapp_db;
+          CREATE USER 'webapp'@'%' IDENTIFIED BY 'WebApp123!';
+          GRANT ALL PRIVILEGES ON webapp_db.* TO 'webapp'@'%';
+          FLUSH PRIVILEGES;
+          
+          USE webapp_db;
+          CREATE TABLE users (
+              id INT AUTO_INCREMENT PRIMARY KEY,
+              username VARCHAR(50) NOT NULL,
+              email VARCHAR(100) NOT NULL,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          );
+          
+          INSERT INTO users (username, email) VALUES 
+          ('admin', 'admin@example.com'),
+          ('user1', 'user1@example.com'),
+          ('user2', 'user2@example.com');
+          EOF
+          
+          # Configure MySQL for remote connections
+          sed -i 's/bind-address.*/bind-address = 0.0.0.0/' /etc/mysql/mysql.conf.d/mysqld.cnf
+          systemctl restart mysqld
+          
+          # Create welcome message
+          cat > /etc/motd << 'EOF'
+          ================================================
+          🗄️  DATABASE SERVER
+          ================================================
+          VPC: Database-vpc (10.2.0.0/16)
+          Region: us-west-2
+          Role: Data Tier
+          
+          Cross-Region Peering:
+          - Hub VPC: 10.0.0.0/16 (us-east-1)
+          
+          Services:
+          - MySQL Server (port 3306)
+          - PostgreSQL Server (port 5432)
+          
+          Database Access:
+          - MySQL: mysql -h localhost -u webapp -p
+          - Password: WebApp123!
+          - Database: webapp_db
+          
+          Cross-Region Latency: ~70ms to us-east-1
+          ================================================
+          EOF
+          
+          # Create database test script
+          cat > /home/ec2-user/test_db.sh << 'EOF'
+          #!/bin/bash
+          echo "Testing MySQL Connection..."
+          mysql -u webapp -pWebApp123! -e "SELECT * FROM webapp_db.users;"
+          echo ""
+          echo "Database Status: Active"
+          echo "Cross-Region Peering: Connected to Hub VPC"
+          EOF
+          chmod +x /home/ec2-user/test_db.sh
+          chown ec2-user:ec2-user /home/ec2-user/test_db.sh
+      Tags:
+        - Key: Name
+          Value: Database-Server
+
+  # ==========================================
+  # RDS SUBNET GROUP (Optional)
+  # ==========================================
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: database-subnet-group
+      DBSubnetGroupDescription: Subnet group for RDS instances
+      SubnetIds:
+        - !Ref DatabasePrivateSubnet1
+        - !Ref DatabasePrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: Database-SubnetGroup
+
+Outputs:
+  DatabaseVPCId:
+    Description: Database VPC ID
+    Value: !Ref DatabaseVPC
+    Export:
+      Name: !Sub "${AWS::StackName}-DatabaseVPC"
+
+  DatabaseInstanceId:
+    Description: Database Instance ID
+    Value: !Ref DatabaseInstance
+    Export:
+      Name: !Sub "${AWS::StackName}-DatabaseInstance"
+
+  DatabasePrivateIP:
+    Description: Database Instance Private IP
+    Value: !GetAtt DatabaseInstance.PrivateIp
+    Export:
+      Name: !Sub "${AWS::StackName}-DatabasePrivateIP"
+
+  DatabasePublicIP:
+    Description: Database Instance Public IP
+    Value: !GetAtt DatabaseInstance.PublicIp
+    Export:
+      Name: !Sub "${AWS::StackName}-DatabasePublicIP"
+
+  # CrossRegionPeeringId:
+  #   Description: Cross-Region VPC Peering Connection ID
+  #   Value: !Ref HubToDatabaseCrossRegionPeering
+  #   Export:
+  #     Name: !Sub "${AWS::StackName}-CrossRegionPeering"
+
+  DatabaseSubnetGroupName:
+    Description: RDS Subnet Group Name
+    Value: !Ref DatabaseSubnetGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-DatabaseSubnetGroup"
+
+  DatabaseConnectionInfo:
+    Description: Database connection information
+    Value: !Sub |
+      MySQL Connection:
+      Host: ${DatabaseInstance.PrivateIp}
+      Port: 3306
+      Database: webapp_db
+      Username: webapp
+      Password: WebApp123!
+      
+      SSH Access:
+      ssh -i ${KeyPairName}.pem ec2-user@${DatabaseInstance.PublicIp}
