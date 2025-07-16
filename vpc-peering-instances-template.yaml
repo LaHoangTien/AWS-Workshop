@@ -5,7 +5,7 @@ Parameters:
   MainStackName:
     Type: String
     Description: Name of the main VPC stack
-    Default: vpc-peering-main
+    Default: FCJ-Workshop-East
 
   KeyPairName:
     Type: AWS::EC2::KeyPair::KeyName
